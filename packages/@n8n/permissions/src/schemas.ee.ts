@@ -10,6 +10,10 @@ export const assignableGlobalRoleSchema = globalRoleSchema.exclude([
 
 export const personalRoleSchema = z.enum([
 	'project:personalOwner', // personalOwner is only used for personal projects
+	'project:admin',
+	'project:editor',
+	'project:viewer',
+	'project:executor',
 ]);
 
 export const teamRoleSchema = z.enum(['project:admin', 'project:editor', 'project:viewer']);
