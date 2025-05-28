@@ -1,0 +1,85 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: n8n-patched-apps
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: n8n-patched-staging
+            namespace: orchestration-staging
+            environment: staging
+            repoURL: 'oci://git.corp.worldstream.com/worldstream/levi9/n8n-improves/charts'
+            chart: n8n-patched
+            targetRevision: 'latest'
+            valuesOverridePath: staging/helm-private/n8n-patched
+            host: n8n-staging.yourdomain.com
+          - name: n8n-patched-production
+            namespace: orchestration
+            environment: production
+            repoURL: 'oci://git.corp.worldstream.com/worldstream/levi9/n8n-improves/charts'
+            chart: n8n-patched
+            targetRevision: 'latest'
+            valuesOverridePath: prod/helm-private/n8n-patched
+            host: n8n.yourdomain.com
+  template:
+    metadata:
+      name: '{{ name }}'
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        app.kubernetes.io/version: '{{ targetRevision }}'
+        app.kubernetes.io/name: '{{ chart }}'
+        environment: '{{ environment }}'
+        component: workflow-automation
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+      annotations:
+        argocd.argoproj.io/sync-wave: '2' # Deploy after dependencies
+        notifications.argoproj.io/subscribe.on-deployed.slack: deployment-notifications
+    spec:
+      project: worldstream
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ApplyOutOfSyncOnly=true
+          - ServerSideApply=false
+        retry:
+          limit: 3
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+      sources:
+        - repoURL: '{{ repoURL }}'
+          chart: '{{ chart }}'
+          targetRevision: '{{ targetRevision }}'
+          helm:
+            valueFiles:
+              - '$valuesRef/{{ valuesOverridePath }}/values-override.yaml'
+            ignoreMissingValueFiles: false
+            parameters:
+              - name: image.repository
+                value: git.corp.worldstream.com/worldstream/levi9/n8n-improves/n8n-patched
+              - name: image.tag
+                value: latest
+              - name: ingress.hosts[0].host
+                value: '{{ host }}'
+              - name: ingress.tls[0].hosts[0]
+                value: '{{ host }}'
+        - repoURL: 'https://git.corp.worldstream.com/worldstream/levi9/argocd/argocd-resources.git'
+          ref: valuesRef
+          targetRevision: main
+      destination:
+        namespace: '{{ namespace }}'
+        server: https://kubernetes.default.svc
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          name: '{{ name }}'
+          jsonPointers:
+            - /spec/template/metadata/annotations/checksum~1config
+            - /spec/template/metadata/annotations/checksum~1secret

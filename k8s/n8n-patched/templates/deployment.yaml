@@ -1,0 +1,157 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "n8n-patched.fullname" . }}
+  labels:
+    {{- include "n8n-patched.labels" . | nindent 4 }}
+    app.kubernetes.io/component: n8n
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "n8n-patched.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "n8n-patched.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: n8n
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "n8n-patched.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 5678
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            # Database configuration
+            - name: DB_TYPE
+              value: {{ .Values.n8n.config.database.type }}
+            - name: DB_POSTGRESDB_HOST
+              value: {{ .Values.n8n.config.database.host }}
+            - name: DB_POSTGRESDB_PORT
+              value: {{ .Values.n8n.config.database.port | quote }}
+            - name: DB_POSTGRESDB_DATABASE
+              value: {{ .Values.n8n.config.database.database }}
+            - name: DB_POSTGRESDB_USER
+              value: {{ .Values.n8n.config.database.username }}
+            - name: DB_POSTGRESDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-patched.fullname" . }}-secret
+                  key: database-password
+
+            # Security configuration
+            - name: N8N_BASIC_AUTH_ACTIVE
+              value: {{ .Values.n8n.config.security.basicAuth.active | quote }}
+            - name: N8N_BASIC_AUTH_USER
+              value: {{ .Values.n8n.config.security.basicAuth.user }}
+            - name: N8N_BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-patched.fullname" . }}-secret
+                  key: basic-auth-password
+
+            # Generic configuration
+            - name: GENERIC_TIMEZONE
+              value: {{ .Values.n8n.config.generic.timezone }}
+            - name: WEBHOOK_URL
+              value: "https://{{ (index .Values.ingress.hosts 0).host }}/"
+
+            # Execution configuration
+            - name: EXECUTIONS_DATA_PRUNE
+              value: {{ .Values.n8n.config.executions.pruneData | quote }}
+            - name: EXECUTIONS_DATA_MAX_AGE
+              value: {{ .Values.n8n.config.executions.pruneDataMaxAge | quote }}
+
+            # Logging configuration
+            - name: N8N_LOG_LEVEL
+              value: {{ .Values.n8n.config.logging.level }}
+            - name: N8N_LOG_OUTPUT
+              value: {{ .Values.n8n.config.logging.output }}
+
+            # Redis configuration (if enabled)
+            {{- if .Values.redis.enabled }}
+            - name: QUEUE_BULL_REDIS_HOST
+              value: {{ include "n8n-patched.fullname" . }}-redis-master
+            - name: QUEUE_BULL_REDIS_PORT
+              value: "6379"
+            - name: QUEUE_BULL_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "n8n-patched.fullname" . }}-redis
+                  key: redis-password
+            {{- end }}
+
+            # Additional environment variables
+            - name: N8N_METRICS
+              value: "true"
+            - name: N8N_DIAGNOSTICS_ENABLED
+              value: "false"
+            - name: N8N_VERSION_NOTIFICATIONS_ENABLED
+              value: "false"
+            - name: N8N_TEMPLATES_ENABLED
+              value: "true"
+            - name: N8N_ONBOARDING_FLOW_DISABLED
+              value: "true"
+
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.n8n
+            - name: config
+              mountPath: /home/node/.n8n/config
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "n8n-patched.fullname" . }}-data
+        - name: config
+          configMap:
+            name: {{ include "n8n-patched.fullname" . }}-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

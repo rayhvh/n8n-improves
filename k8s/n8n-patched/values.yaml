@@ -1,0 +1,143 @@
+# Default values for n8n-patched
+replicaCount: 1
+
+image:
+  repository: your-gitlab-registry.com/your-group/n8n-improves/n8n-patched
+  pullPolicy: IfNotPresent
+  tag: 'latest'
+
+imagePullSecrets:
+  - name: gitlab-registry-secret
+
+nameOverride: ''
+fullnameOverride: ''
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ''
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 5678
+
+ingress:
+  enabled: true
+  className: 'apisix'
+  annotations:
+    k8s.apisix.apache.org/tls-redirect: 'true'
+  hosts:
+    - host: n8n.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: n8n-tls
+      hosts:
+        - n8n.yourdomain.com
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# n8n specific configuration
+n8n:
+  config:
+    database:
+      type: postgresdb
+      host: postgres-n8n
+      port: 5432
+      database: n8n
+      username: n8n
+      password: '' # Will be set via secret
+    security:
+      basicAuth:
+        active: true
+        user: admin
+        password: '' # Will be set via secret
+    generic:
+      timezone: Europe/Amsterdam
+    executions:
+      pruneData: true
+      pruneDataMaxAge: 336 # 2 weeks
+    logging:
+      level: info
+      output: console
+
+# PostgreSQL dependency
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: '' # Will be set via secret
+    username: n8n
+    password: '' # Will be set via secret
+    database: n8n
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ''
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+# Redis for session management and caching
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: '' # Will be set via secret
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+# Monitoring
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    interval: 30s
+    scrapeTimeout: 10s

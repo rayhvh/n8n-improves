@@ -46,7 +46,7 @@ build-patched-image:
     - >
       docker build
       --build-arg N8N_VERSION=master
-      --file Dockerfile.patched
+      --file Dockerfile.local
       --tag $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$IMAGE_TAG
       --tag $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$LATEST_TAG
       .
@@ -59,21 +59,36 @@ build-patched-image:
   dependencies:
     - test-patch
 
-# Deploy to staging environment
-deploy-staging:
-  stage: deploy
-  image: alpine:latest
+# Package and publish Helm chart
+publish-helm-chart:
+  stage: build
+  image: alpine/helm:latest
   before_script:
-    - apk add --no-cache openssh-client docker-compose
-    - eval $(ssh-agent -s)
-    - echo "$STAGING_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
-    - ssh-keyscan -H $STAGING_HOST >> ~/.ssh/known_hosts
+    - helm repo add stable https://charts.helm.sh/stable
+    - echo $CI_REGISTRY_PASSWORD | helm registry login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
   script:
-    - echo "🚀 Deploying to staging environment..."
-    - ssh $STAGING_USER@$STAGING_HOST "cd /opt/n8n-patched && echo 'Pulling latest patched image...' && echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY && docker pull $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$LATEST_TAG && echo 'Updating docker-compose...' && docker-compose down && docker-compose up -d && echo 'Deployment completed!'"
-    - echo "🌐 Staging environment updated at https://$STAGING_HOST:5678"
+    - echo "📦 Packaging Helm chart..."
+    - cd k8s
+    - helm dependency update n8n-patched
+    - helm package n8n-patched
+    - echo "📤 Publishing Helm chart to registry..."
+    - helm push n8n-patched-*.tgz oci://$CI_REGISTRY_IMAGE/charts
+  rules:
+    - if: $CI_COMMIT_BRANCH == "feat/add-project-executor-role"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  dependencies:
+    - test-patch
+
+# Deploy to staging environment via ArgoCD
+argocd-sync-staging:
+  stage: deploy
+  image: argoproj/argocd:latest
+  before_script:
+    - argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
+  script:
+    - echo "🚀 Syncing ArgoCD application for staging..."
+    - argocd app sync n8n-patched-staging --force
+    - argocd app wait n8n-patched-staging --health
   environment:
     name: staging
     url: https://$STAGING_HOST:5678
@@ -82,22 +97,18 @@ deploy-staging:
       when: manual
   dependencies:
     - build-patched-image
+    - publish-helm-chart
 
-# Deploy to production environment
-deploy-production:
+# Deploy to production environment via ArgoCD
+argocd-sync-production:
   stage: deploy
-  image: alpine:latest
+  image: argoproj/argocd:latest
   before_script:
-    - apk add --no-cache openssh-client docker-compose
-    - eval $(ssh-agent -s)
-    - echo "$PRODUCTION_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
-    - ssh-keyscan -H $PRODUCTION_HOST >> ~/.ssh/known_hosts
+    - argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
   script:
-    - echo "🚀 Deploying to production environment..."
-    - ssh $PRODUCTION_USER@$PRODUCTION_HOST "cd /opt/n8n-patched && echo 'Creating backup...' && docker-compose down && echo 'Pulling latest image...' && echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY && docker pull $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$LATEST_TAG && docker-compose up -d && echo 'Production deployment completed!'"
-    - echo "🌐 Production environment updated at https://$PRODUCTION_HOST:5678"
+    - echo "🚀 Syncing ArgoCD application for production..."
+    - argocd app sync n8n-patched-production --force
+    - argocd app wait n8n-patched-production --health
   environment:
     name: production
     url: https://$PRODUCTION_HOST:5678
@@ -106,6 +117,7 @@ deploy-production:
       when: manual
   dependencies:
     - build-patched-image
+    - publish-helm-chart
 
 # Scheduled job to update patch with latest n8n
 update-patch:

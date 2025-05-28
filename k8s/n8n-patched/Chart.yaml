@@ -1,0 +1,17 @@
+apiVersion: v2
+name: n8n-patched
+description: A Helm chart for n8n with project:executor role patch
+type: application
+version: 1.0.0
+appVersion: 'latest'
+keywords:
+  - n8n
+  - workflow
+  - automation
+  - patched
+home: https://n8n.io
+sources:
+  - https://github.com/n8n-io/n8n
+maintainers:
+  - name: Worldstream Team
+    email: your-team@worldstream.com
