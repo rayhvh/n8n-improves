@@ -1,0 +1,70 @@
+# Multi-stage build for better performance and smaller final image
+
+# Stage 1: Build stage
+FROM node:20-alpine AS builder
+
+# Install git and necessary build tools
+RUN apk add --no-cache git python3 make g++
+
+# Set working directory
+WORKDIR /app
+
+# Clone the latest n8n source code
+ARG N8N_VERSION=master
+RUN git clone --depth 1 --branch ${N8N_VERSION} https://github.com/n8n-io/n8n.git .
+
+# Apply the executor role patch manually
+RUN echo "🩹 Applying project:executor role patch..."
+
+# 1. Update project-scopes.ee.ts
+RUN sed -i '/export const PROJECT_VIEWER_SCOPES/a\\nexport const PROJECT_EXECUTOR_SCOPES: Scope[] = [...PROJECT_VIEWER_SCOPES, '"'"'workflow:execute'"'"'];' \
+    packages/@n8n/permissions/src/roles/scopes/project-scopes.ee.ts
+
+# 2. Update schemas.ee.ts
+RUN sed -i "s/'project:viewer',/'project:viewer',\n\t'project:executor',/" \
+    packages/@n8n/permissions/src/schemas.ee.ts
+
+# 3. Update all-roles.ts
+RUN sed -i "s/'project:viewer': 'Project Viewer',/'project:viewer': 'Project Viewer',\n\t'project:executor': 'Project Executor',/" \
+    packages/@n8n/permissions/src/roles/all-roles.ts
+
+# 4. Update types-db.ts
+RUN sed -i "s/| 'project:viewer';/| 'project:viewer'\n\t| 'project:executor';/" \
+    packages/@n8n/db/src/entities/types-db.ts
+
+# 5. Update role-maps.ee.ts - add import
+RUN sed -i '/PROJECT_VIEWER_SCOPES,/a\\tPROJECT_EXECUTOR_SCOPES,' \
+    packages/@n8n/permissions/src/roles/role-maps.ee.ts
+
+# 6. Update role-maps.ee.ts - add to map
+RUN sed -i "/'project:viewer': PROJECT_VIEWER_SCOPES,/a\\t'project:executor': PROJECT_EXECUTOR_SCOPES," \
+    packages/@n8n/permissions/src/roles/role-maps.ee.ts
+
+# Install pnpm
+RUN npm install -g pnpm@10.2.1
+
+# Install dependencies and build
+RUN pnpm install --frozen-lockfile
+RUN pnpm build
+
+# Stage 2: Production stage
+FROM n8nio/base:20
+
+# Copy built application from builder stage
+COPY --from=builder --chown=node:node /app /home/node
+
+# Set working directory
+WORKDIR /home/node
+
+# Switch to node user
+USER node
+
+# Expose the n8n port
+EXPOSE 5678
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:5678/healthz || exit 1
+
+# Start n8n
+CMD ["pnpm", "start"]

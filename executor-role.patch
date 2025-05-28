@@ -1,0 +1,163 @@
+From 9360f55e64aafd20e54aec51476197363e983d8b Mon Sep 17 00:00:00 2001
+From: "raymond.vandervelden" <raymond.vandervelden@worldstream.com>
+Date: Tue, 27 May 2025 15:04:41 +0200
+Subject: [PATCH] feat: add project:executor role with workflow execution
+ permissions
+
+- Add new project:executor role that extends project:viewer with workflow:execute scope
+- Update ProjectRole type definitions and schema validation
+- Add comprehensive test coverage for the new role
+- Update role mappings and display names
+
+The project:executor role provides a middle ground between project:viewer
+(read-only) and project:editor (full edit permissions), allowing users to
+view project resources and execute workflows without modification rights.
+
+This enhances granular project permissions by providing a dedicated role
+for users who need to execute workflows but should not have edit access.
+
+Resolves: Enhanced granular project permissions
+---
+ packages/@n8n/db/src/entities/types-db.ts     |  3 +-
+ .../permissions/src/__tests__/schemas.test.ts |  1 +
+ .../@n8n/permissions/src/roles/all-roles.ts   |  1 +
+ .../permissions/src/roles/role-maps.ee.ts     |  2 +
+ .../src/roles/scopes/project-scopes.ee.ts     |  2 +
+ packages/@n8n/permissions/src/schemas.ee.ts   |  1 +
+ .../utilities/__tests__/getRoleScopes.test.ts | 38 +++++++++++++++----
+ 7 files changed, 40 insertions(+), 8 deletions(-)
+
+diff --git a/packages/@n8n/db/src/entities/types-db.ts b/packages/@n8n/db/src/entities/types-db.ts
+index b93c01873..a5c0b2fae 100644
+--- a/packages/@n8n/db/src/entities/types-db.ts
++++ b/packages/@n8n/db/src/entities/types-db.ts
+@@ -321,7 +321,8 @@ export type ProjectRole =
+ 	| 'project:personalOwner'
+ 	| 'project:admin'
+ 	| 'project:editor'
+-	| 'project:viewer';
++	| 'project:viewer'
++	| 'project:executor';
+ 
+ export interface IGetExecutionsQueryFilter {
+ 	id?: FindOperator<string> | string;
+diff --git a/packages/@n8n/permissions/src/__tests__/schemas.test.ts b/packages/@n8n/permissions/src/__tests__/schemas.test.ts
+index 1bfb097ec..73204b23b 100644
+--- a/packages/@n8n/permissions/src/__tests__/schemas.test.ts
++++ b/packages/@n8n/permissions/src/__tests__/schemas.test.ts
+@@ -57,6 +57,7 @@ describe('projectRoleSchema', () => {
+ 		{ name: 'valid role: project:admin', value: 'project:admin', expected: true },
+ 		{ name: 'valid role: project:editor', value: 'project:editor', expected: true },
+ 		{ name: 'valid role: project:viewer', value: 'project:viewer', expected: true },
++		{ name: 'valid role: project:executor', value: 'project:executor', expected: true },
+ 		{ name: 'invalid role', value: 'invalid-role', expected: false },
+ 	])('should validate $name', ({ value, expected }) => {
+ 		const result = projectRoleSchema.safeParse(value);
+diff --git a/packages/@n8n/permissions/src/roles/all-roles.ts b/packages/@n8n/permissions/src/roles/all-roles.ts
+index 411c962df..ea664dcc8 100644
+--- a/packages/@n8n/permissions/src/roles/all-roles.ts
++++ b/packages/@n8n/permissions/src/roles/all-roles.ts
+@@ -15,6 +15,7 @@ const ROLE_NAMES: Record<AllRoleTypes, string> = {
+ 	'project:admin': 'Project Admin',
+ 	'project:editor': 'Project Editor',
+ 	'project:viewer': 'Project Viewer',
++	'project:executor': 'Project Executor',
+ 	'credential:user': 'Credential User',
+ 	'credential:owner': 'Credential Owner',
+ 	'workflow:owner': 'Workflow Owner',
+diff --git a/packages/@n8n/permissions/src/roles/role-maps.ee.ts b/packages/@n8n/permissions/src/roles/role-maps.ee.ts
+index 5315b91a3..d7ff44aee 100644
+--- a/packages/@n8n/permissions/src/roles/role-maps.ee.ts
++++ b/packages/@n8n/permissions/src/roles/role-maps.ee.ts
+@@ -12,6 +12,7 @@ import {
+ 	PERSONAL_PROJECT_OWNER_SCOPES,
+ 	PROJECT_EDITOR_SCOPES,
+ 	PROJECT_VIEWER_SCOPES,
++	PROJECT_EXECUTOR_SCOPES,
+ } from './scopes/project-scopes.ee';
+ import {
+ 	WORKFLOW_SHARING_OWNER_SCOPES,
+@@ -36,6 +37,7 @@ export const PROJECT_SCOPE_MAP: Record<ProjectRole, Scope[]> = {
+ 	'project:personalOwner': PERSONAL_PROJECT_OWNER_SCOPES,
+ 	'project:editor': PROJECT_EDITOR_SCOPES,
+ 	'project:viewer': PROJECT_VIEWER_SCOPES,
++	'project:executor': PROJECT_EXECUTOR_SCOPES,
+ };
+ 
+ export const CREDENTIALS_SHARING_SCOPE_MAP: Record<CredentialSharingRole, Scope[]> = {
+diff --git a/packages/@n8n/permissions/src/roles/scopes/project-scopes.ee.ts b/packages/@n8n/permissions/src/roles/scopes/project-scopes.ee.ts
+index dd4621272..5fd3155fa 100644
+--- a/packages/@n8n/permissions/src/roles/scopes/project-scopes.ee.ts
++++ b/packages/@n8n/permissions/src/roles/scopes/project-scopes.ee.ts
+@@ -90,3 +90,5 @@ export const PROJECT_VIEWER_SCOPES: Scope[] = [
+ 	'folder:read',
+ 	'folder:list',
+ ];
++
++export const PROJECT_EXECUTOR_SCOPES: Scope[] = [...PROJECT_VIEWER_SCOPES, 'workflow:execute'];
+diff --git a/packages/@n8n/permissions/src/schemas.ee.ts b/packages/@n8n/permissions/src/schemas.ee.ts
+index 2a17457c2..702ee0f29 100644
+--- a/packages/@n8n/permissions/src/schemas.ee.ts
++++ b/packages/@n8n/permissions/src/schemas.ee.ts
+@@ -13,6 +13,7 @@ export const projectRoleSchema = z.enum([
+ 	'project:admin',
+ 	'project:editor',
+ 	'project:viewer',
++	'project:executor',
+ ]);
+ 
+ export const credentialSharingRoleSchema = z.enum(['credential:owner', 'credential:user']);
+diff --git a/packages/@n8n/permissions/src/utilities/__tests__/getRoleScopes.test.ts b/packages/@n8n/permissions/src/utilities/__tests__/getRoleScopes.test.ts
+index 363c214b5..678a56bfc 100644
+--- a/packages/@n8n/permissions/src/utilities/__tests__/getRoleScopes.test.ts
++++ b/packages/@n8n/permissions/src/utilities/__tests__/getRoleScopes.test.ts
+@@ -1,15 +1,39 @@
+ import type { AllRoleTypes, Resource } from '../../types.ee';
+ import { getRoleScopes, COMBINED_ROLE_MAP } from '../getRoleScopes.ee';
++import {
++	PROJECT_VIEWER_SCOPES,
++	PROJECT_EXECUTOR_SCOPES,
++} from '../../roles/scopes/project-scopes.ee';
+ 
+ describe('getRoleScopes', () => {
+ 	describe('role scope retrieval', () => {
+-		test.each(['global:owner', 'global:admin', 'project:admin'] satisfies AllRoleTypes[])(
+-			'should return scopes for %s',
+-			(role) => {
+-				const scopes = getRoleScopes(role);
+-				expect(scopes).toEqual(COMBINED_ROLE_MAP[role]);
+-			},
+-		);
++		test.each([
++			'global:owner',
++			'global:admin',
++			'project:admin',
++			// Add other roles as needed or test them specifically
++		] satisfies AllRoleTypes[])('should return scopes for %s from COMBINED_ROLE_MAP', (role) => {
++			const scopes = getRoleScopes(role);
++			expect(scopes).toEqual(COMBINED_ROLE_MAP[role]);
++		});
++
++		test('should return correct scopes for project:viewer', () => {
++			const scopes = getRoleScopes('project:viewer');
++			expect(scopes).toEqual(expect.arrayContaining(PROJECT_VIEWER_SCOPES));
++			expect(scopes.length).toEqual(PROJECT_VIEWER_SCOPES.length);
++		});
++
++		test('should return correct scopes for project:executor', () => {
++			const scopes = getRoleScopes('project:executor');
++			// Check that all viewer scopes are present
++			expect(scopes).toEqual(expect.arrayContaining(PROJECT_VIEWER_SCOPES));
++			// Check that the execute scope is present
++			expect(scopes).toContain('workflow:execute');
++			// Check the total number of scopes to match PROJECT_EXECUTOR_SCOPES
++			expect(scopes.length).toEqual(PROJECT_EXECUTOR_SCOPES.length);
++			// For a more precise check, ensure set equality
++			expect(new Set(scopes)).toEqual(new Set(PROJECT_EXECUTOR_SCOPES));
++		});
+ 	});
+ 
+ 	describe('resource filtering', () => {
+-- 
+2.43.0
+

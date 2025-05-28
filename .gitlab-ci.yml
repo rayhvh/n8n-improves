@@ -1,0 +1,129 @@
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_IMAGE_NAME: 'n8n-patched'
+  DOCKER_REGISTRY: '${CI_REGISTRY}'
+  IMAGE_TAG: '${CI_COMMIT_SHORT_SHA}'
+  LATEST_TAG: 'latest'
+
+# Test the patch before building
+test-patch:
+  stage: test
+  image: node:20-alpine
+  before_script:
+    - apk add --no-cache git
+    - npm install -g pnpm@10.2.1
+  script:
+    - echo "🧪 Testing executor role patch..."
+    - pnpm install --frozen-lockfile
+    - pnpm build
+    - pnpm test --filter=@n8n/permissions
+  rules:
+    - if: $CI_COMMIT_BRANCH == "feat/add-project-executor-role"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  artifacts:
+    reports:
+      junit: test-results.xml
+    expire_in: 1 week
+
+# Build Docker image with patch applied
+build-patched-image:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: '/certs'
+  before_script:
+    - echo "🔐 Logging into GitLab Container Registry..."
+    - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - echo "🏗️ Building patched n8n Docker image..."
+    - >
+      docker build
+      --build-arg N8N_VERSION=master
+      --file Dockerfile.patched
+      --tag $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$IMAGE_TAG
+      --tag $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$LATEST_TAG
+      .
+    - echo "📤 Pushing images to registry..."
+    - docker push $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$IMAGE_TAG
+    - docker push $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$LATEST_TAG
+  rules:
+    - if: $CI_COMMIT_BRANCH == "feat/add-project-executor-role"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  dependencies:
+    - test-patch
+
+# Deploy to staging environment
+deploy-staging:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client docker-compose
+    - eval $(ssh-agent -s)
+    - echo "$STAGING_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan -H $STAGING_HOST >> ~/.ssh/known_hosts
+  script:
+    - echo "🚀 Deploying to staging environment..."
+    - ssh $STAGING_USER@$STAGING_HOST "cd /opt/n8n-patched && echo 'Pulling latest patched image...' && echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY && docker pull $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$LATEST_TAG && echo 'Updating docker-compose...' && docker-compose down && docker-compose up -d && echo 'Deployment completed!'"
+    - echo "🌐 Staging environment updated at https://$STAGING_HOST:5678"
+  environment:
+    name: staging
+    url: https://$STAGING_HOST:5678
+  rules:
+    - if: $CI_COMMIT_BRANCH == "feat/add-project-executor-role"
+      when: manual
+  dependencies:
+    - build-patched-image
+
+# Deploy to production environment
+deploy-production:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client docker-compose
+    - eval $(ssh-agent -s)
+    - echo "$PRODUCTION_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan -H $PRODUCTION_HOST >> ~/.ssh/known_hosts
+  script:
+    - echo "🚀 Deploying to production environment..."
+    - ssh $PRODUCTION_USER@$PRODUCTION_HOST "cd /opt/n8n-patched && echo 'Creating backup...' && docker-compose down && echo 'Pulling latest image...' && echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY && docker pull $CI_REGISTRY_IMAGE/$DOCKER_IMAGE_NAME:$LATEST_TAG && docker-compose up -d && echo 'Production deployment completed!'"
+    - echo "🌐 Production environment updated at https://$PRODUCTION_HOST:5678"
+  environment:
+    name: production
+    url: https://$PRODUCTION_HOST:5678
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  dependencies:
+    - build-patched-image
+
+# Scheduled job to update patch with latest n8n
+update-patch:
+  stage: build
+  image: alpine/git:latest
+  before_script:
+    - apk add --no-cache bash
+    - git config --global user.email "$GITLAB_USER_EMAIL"
+    - git config --global user.name "$GITLAB_USER_NAME"
+  script:
+    - chmod +x scripts/update-and-patch.sh
+    - ./scripts/update-and-patch.sh
+    - |
+      if git diff --quiet; then
+        echo "✅ No updates needed - patch is current"
+      else
+        echo "📤 Pushing updated patch..."
+        git push origin feat/add-project-executor-role
+      fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
